@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Japanese Speaking Drill</title>
+
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 760px;
+      margin: 40px auto;
+      padding: 0 20px;
+      background: #111827;
+      color: #f9fafb;
+    }
+
+    .card {
+      background: #1f2937;
+      padding: 28px;
+      border-radius: 18px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin-bottom: 6px;
+    }
+
+    #english {
+      font-size: 1.8rem;
+      margin: 25px 0;
+    }
+
+    #answer {
+      font-size: 1.4rem;
+      margin-top: 20px;
+      display: none;
+    }
+
+    button {
+      padding: 12px 18px;
+      margin: 6px;
+      border: none;
+      border-radius: 10px;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    #loadModel {
+      background: #2563eb;
+      color: white;
+    }
+
+    #record {
+      background: #dc2626;
+      color: white;
+    }
+
+    #stop {
+      background: #f59e0b;
+      color: black;
+    }
+
+    #check {
+      background: #16a34a;
+      color: white;
+    }
+
+    #next {
+      background: #7c3aed;
+      color: white;
+    }
+
+    #status,
+    #transcript,
+    #feedback {
+      margin-top: 16px;
+      line-height: 1.5;
+    }
+
+    .small {
+      opacity: 0.75;
+      font-size: 0.9rem;
+    }
+
+    .correct {
+      color: #4ade80;
+    }
+
+    .close {
+      color: #facc15;
+    }
+
+    .wrong {
+      color: #f87171;
+    }
+  </style>
+</head>
+
+<body>
+
+<h1>日本語 Speaking Drill</h1>
+
+<p class="small">
+  English → speak Japanese → Whisper checks what you said.
+</p>
+
+<div class="card">
+
+  <div id="counter"></div>
+
+  <div id="english"></div>
+
+  <div>
+    <button id="loadModel">1. Load speech model</button>
+  </div>
+
+  <div>
+    <button id="record" disabled>🎙 Record</button>
+    <button id="stop" disabled>⏹ Stop</button>
+    <button id="check" disabled>Check answer</button>
+  </div>
+
+  <div>
+    <button id="reveal">Reveal Japanese</button>
+    <button id="next">Next →</button>
+  </div>
+
+  <div id="status"></div>
+
+  <div id="transcript"></div>
+
+  <div id="feedback"></div>
+
+  <div id="answer"></div>
+
+</div>
+
+
+<script type="module">
+
+import {
+  pipeline,
+  env
+} from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2";
+
+
+/* -------------------------------------------------
+   10 TEST PHRASES
+-------------------------------------------------- */
+
+const cards = [
+
+  {
+    en: "I study Japanese every day.",
+    ja: "毎日、日本語を勉強します。"
+  },
+
+  {
+    en: "Japanese is difficult, but interesting.",
+    ja: "日本語は難しいですが、面白いです。"
+  },
+
+  {
+    en: "I want to go to Japan in the future.",
+    ja: "将来、日本に行きたいです。"
+  },
+
+  {
+    en: "I often talk with my friends after school.",
+    ja: "放課後、友達とよく話します。"
+  },
+
+  {
+    en: "Because I have an exam, I have to study.",
+    ja: "試験があるので、勉強しなければなりません。"
+  },
+
+  {
+    en: "When I am stressed, I listen to music.",
+    ja: "ストレスがある時、音楽を聞きます。"
+  },
+
+  {
+    en: "I think learning Japanese is useful.",
+    ja: "日本語を勉強することは役に立つと思います。"
+  },
+
+  {
+    en: "If I enter university, I want to join a club.",
+    ja: "大学に入ったら、部活に入りたいです。"
+  },
+
+  {
+    en: "I have been to Japan once.",
+    ja: "日本に一度行ったことがあります。"
+  },
+
+  {
+    en: "I try to practise speaking Japanese every day.",
+    ja: "毎日、日本語を話す練習をするようにしています。"
+  }
+
+];
+
+
+/* -------------------------------------------------
+   VARIABLES
+-------------------------------------------------- */
+
+let current = 0;
+
+let transcriber = null;
+
+let mediaRecorder = null;
+
+let audioChunks = [];
+
+let recordedBlob = null;
+
+
+/* -------------------------------------------------
+   ELEMENTS
+-------------------------------------------------- */
+
+const english = document.querySelector("#english");
+const answer = document.querySelector("#answer");
+const counter = document.querySelector("#counter");
+
+const loadModelBtn = document.querySelector("#loadModel");
+const recordBtn = document.querySelector("#record");
+const stopBtn = document.querySelector("#stop");
+const checkBtn = document.querySelector("#check");
+
+const revealBtn = document.querySelector("#reveal");
+const nextBtn = document.querySelector("#next");
+
+const status = document.querySelector("#status");
+const transcriptDiv = document.querySelector("#transcript");
+const feedback = document.querySelector("#feedback");
+
+
+/* -------------------------------------------------
+   DISPLAY CARD
+-------------------------------------------------- */
+
+function showCard() {
+
+  const card = cards[current];
+
+  counter.textContent =
+    `Phrase ${current + 1} / ${cards.length}`;
+
+  english.textContent = card.en;
+
+  answer.textContent = card.ja;
+
+  answer.style.display = "none";
+
+  transcriptDiv.textContent = "";
+
+  feedback.textContent = "";
+
+  recordedBlob = null;
+
+  checkBtn.disabled = true;
+}
+
+showCard();
+
+
+/* -------------------------------------------------
+   LOAD WHISPER
+-------------------------------------------------- */
+
+loadModelBtn.onclick = async () => {
+
+  loadModelBtn.disabled = true;
+
+  status.textContent =
+    "Loading Whisper Tiny... first load may take a while.";
+
+  try {
+
+    transcriber = await pipeline(
+      "automatic-speech-recognition",
+      "onnx-community/whisper-tiny",
+      {
+        device: "wasm",
+
+        progress_callback: (progress) => {
+
+          if (progress.progress) {
+
+            status.textContent =
+              `Loading model: ${Math.round(progress.progress)}%`;
+
+          }
+
+        }
+      }
+    );
+
+    status.textContent =
+      "✅ Speech model loaded.";
+
+    recordBtn.disabled = false;
+
+  }
+
+  catch (error) {
+
+    console.error(error);
+
+    status.textContent =
+      "❌ Model failed to load. Check Firefox console.";
+
+    loadModelBtn.disabled = false;
+
+  }
+
+};
+
+
+/* -------------------------------------------------
+   RECORD AUDIO
+-------------------------------------------------- */
+
+recordBtn.onclick = async () => {
+
+  try {
+
+    const stream =
+      await navigator.mediaDevices.getUserMedia({
+        audio: true
+      });
+
+    let options = {};
+
+    if (
+      MediaRecorder.isTypeSupported(
+        "audio/ogg;codecs=opus"
+      )
+    ) {
+
+      options.mimeType =
+        "audio/ogg;codecs=opus";
+
+    }
+
+    mediaRecorder =
+      new MediaRecorder(stream, options);
+
+    audioChunks = [];
+
+    mediaRecorder.ondataavailable = event => {
+
+      if (event.data.size > 0) {
+        audioChunks.push(event.data);
+      }
+
+    };
+
+    mediaRecorder.onstop = () => {
+
+      recordedBlob =
+        new Blob(
+          audioChunks,
+          { type: mediaRecorder.mimeType }
+        );
+
+      checkBtn.disabled = false;
+
+      status.textContent =
+        "Recording ready. Press Check answer.";
+
+      stream.getTracks()
+        .forEach(track => track.stop());
+
+    };
+
+    mediaRecorder.start();
+
+    recordBtn.disabled = true;
+
+    stopBtn.disabled = false;
+
+    status.textContent =
+      "🔴 Recording... say the Japanese sentence.";
+
+  }
+
+  catch (error) {
+
+    console.error(error);
+
+    status.textContent =
+      "Microphone permission failed.";
+
+  }
+
+};
+
+
+stopBtn.onclick = () => {
+
+  if (
+    mediaRecorder &&
+    mediaRecorder.state === "recording"
+  ) {
+
+    mediaRecorder.stop();
+
+  }
+
+  stopBtn.disabled = true;
+
+  recordBtn.disabled = false;
+
+};
+
+
+/* -------------------------------------------------
+   CONVERT AUDIO TO 16kHz
+-------------------------------------------------- */
+
+async function blobTo16k(blob) {
+
+  const buffer =
+    await blob.arrayBuffer();
+
+  const context =
+    new AudioContext();
+
+  const decoded =
+    await context.decodeAudioData(buffer);
+
+  const offline =
+    new OfflineAudioContext(
+      1,
+      Math.ceil(decoded.duration * 16000),
+      16000
+    );
+
+  const source =
+    offline.createBufferSource();
+
+  source.buffer = decoded;
+
+  source.connect(
+    offline.destination
+  );
+
+  source.start();
+
+  const rendered =
+    await offline.startRendering();
+
+  return rendered.getChannelData(0);
+
+}
+
+
+/* -------------------------------------------------
+   NORMALISE JAPANESE
+-------------------------------------------------- */
+
+function normalizeJapanese(text) {
+
+  return text
+    .normalize("NFKC")
+    .replace(/[。、！？!?.,\s]/g, "")
+    .replace(/^はい/, "")
+    .replace(/^えっと/, "")
+    .replace(/^えーと/, "")
+    .replace(/^そうですね/, "");
+
+}
+
+
+/* -------------------------------------------------
+   LEVENSHTEIN DISTANCE
+-------------------------------------------------- */
+
+function levenshtein(a, b) {
+
+  const matrix =
+    Array.from(
+      { length: b.length + 1 },
+      () =>
+        Array(a.length + 1).fill(0)
+    );
+
+  for (
+    let i = 0;
+    i <= a.length;
+    i++
+  ) {
+
+    matrix[0][i] = i;
+
+  }
+
+  for (
+    let j = 0;
+    j <= b.length;
+    j++
+  ) {
+
+    matrix[j][0] = j;
+
+  }
+
+  for (
+    let j = 1;
+    j <= b.length;
+    j++
+  ) {
+
+    for (
+      let i = 1;
+      i <= a.length;
+      i++
+    ) {
+
+      const cost =
+        a[i - 1] === b[j - 1]
+          ? 0
+          : 1;
+
+      matrix[j][i] =
+        Math.min(
+
+          matrix[j - 1][i] + 1,
+
+          matrix[j][i - 1] + 1,
+
+          matrix[j - 1][i - 1] + cost
+
+        );
+
+    }
+
+  }
+
+  return matrix[b.length][a.length];
+
+}
+
+
+function similarity(a, b) {
+
+  a = normalizeJapanese(a);
+
+  b = normalizeJapanese(b);
+
+  const longest =
+    Math.max(a.length, b.length);
+
+  if (longest === 0) return 100;
+
+  const distance =
+    levenshtein(a, b);
+
+  return (
+    1 - distance / longest
+  ) * 100;
+
+}
+
+
+/* -------------------------------------------------
+   CHECK ANSWER
+-------------------------------------------------- */
+
+checkBtn.onclick = async () => {
+
+  if (!recordedBlob) return;
+
+  checkBtn.disabled = true;
+
+  status.textContent =
+    "Transcribing Japanese...";
+
+  try {
+
+    const audio =
+      await blobTo16k(recordedBlob);
+
+    const result =
+      await transcriber(
+        audio,
+        {
+          language: "japanese",
+          task: "transcribe"
+        }
+      );
+
+    const spoken =
+      result.text.trim();
+
+    transcriptDiv.innerHTML =
+      `<strong>Whisper heard:</strong><br>${spoken}`;
+
+    const target =
+      cards[current].ja;
+
+    const score =
+      similarity(spoken, target);
+
+    answer.style.display =
+      "block";
+
+    if (score >= 88) {
+
+      feedback.innerHTML =
+        `<span class="correct">
+        ✅ Correct — ${score.toFixed(0)}%
+        </span>`;
+
+    }
+
+    else if (score >= 72) {
+
+      feedback.innerHTML =
+        `<span class="close">
+        🟡 Close — ${score.toFixed(0)}%
+        </span>`;
+
+    }
+
+    else {
+
+      feedback.innerHTML =
+        `<span class="wrong">
+        ❌ Try again — ${score.toFixed(0)}%
+        </span>`;
+
+    }
+
+    status.textContent =
+      "Done.";
+
+  }
+
+  catch (error) {
+
+    console.error(error);
+
+    status.textContent =
+      "❌ Transcription error. Check the browser console.";
+
+  }
+
+  checkBtn.disabled = false;
+
+};
+
+
+/* -------------------------------------------------
+   REVEAL ANSWER
+-------------------------------------------------- */
+
+revealBtn.onclick = () => {
+
+  answer.style.display =
+    "block";
+
+};
+
+
+/* -------------------------------------------------
+   NEXT CARD
+-------------------------------------------------- */
+
+nextBtn.onclick = () => {
+
+  current =
+    (current + 1)
+    % cards.length;
+
+  showCard();
+
+};
+
+</script>
+
+</body>
+</html>
